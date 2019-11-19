@@ -1,6 +1,6 @@
-# GraphFusedElasticNet
+# GraphFusedElasticNet.jl
 
-Hi! This code accompanies the paper:
+Hi! This repository contains Julia code that accompanies the paper:
 
 Tec, Mauricio, Natalia Zuniga-Garcia, Randy B. Machemehl, James G. Scott (2019) *Large-Scale Spatiotemporal Density Smoothing with the Graph-fused Elastic Net: Application toRide-sourcing Driver Productivity Analysis*. 
 
