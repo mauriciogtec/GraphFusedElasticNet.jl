@@ -1,22 +1,24 @@
 using Base.Threads
 using DataStructures
-import LightGraphs: SimpleGraph, add_edge!
 import Base: print, show
 
 
 """
-Graph Fused Elastic Net Model
+Gaussian likelihood Graph Fused Elastic Net Model
 """
-mutable struct BinomialEnet
+mutable struct GaussianGFEN
     # trail info
     ptr::Vector{Int}
     brks::Vector{Int}
     lambdasl1::Vector{Float64}
     lambdasl2::Vector{Float64}
-
     num_nodes::Int
     num_slacks::Int
     num_trails::Int
+
+    # prior info
+    prior_mean::Float64
+    prior_weight::Float64
 
     # model parameters and computed quantities
     beta::Vector{Float64}
@@ -46,6 +48,7 @@ mutable struct BinomialEnet
     admm_balance_every::Int
     admm_fixed_inflation_factor::Float64
     admm_penalty_max_inflation::Float64
+    admm_min_penalty::Float64
 
     # Acceleration parameters
     accelerate::Bool
@@ -53,11 +56,13 @@ mutable struct BinomialEnet
     accelerate_use_restarts::Bool
 
     # main constructor
-    function BinomialEnet(
+    function GaussianGFEN(
         ptr::Vector{Int},
         brks::Vector{Int},
         lambdasl1::Vector{Float64},
         lambdasl2::Vector{Float64};
+        prior_mean::Float64 = 0.0,
+        prior_weight::Float64 = 1e-6,
         maxsteps::Int = Int(1e5),
         check_convergence_every::Int = 1,
         abstol::Float64 = 1e-9,
@@ -65,6 +70,7 @@ mutable struct BinomialEnet
         save_norms::Bool = true,
         save_loss::Bool = true,
         admm_init_penalty::Float64 = 1.0,
+        admm_min_penalty::Float64 = 0.01,
         admm_fixed_inflation_factor::Float64 = 2.,
         admm_balance_every::Int = 10,
         admm_residual_balancing_gap::Float64 = 10.,
@@ -85,10 +91,11 @@ mutable struct BinomialEnet
         @assert admm_residual_balancing_gap > 0.
         @assert check_convergence_every > 0
         @assert admm_penalty_max_inflation > 0.
+        @assert prior_weight > 0.
 
         # new object
         x = new()
-
+        
         # assign trails
         x.ptr = ptr
         x.brks = brks
@@ -97,6 +104,8 @@ mutable struct BinomialEnet
         x.num_nodes = maximum(ptr)
         x.num_trails = length(brks) - 1
         x.num_slacks = length(ptr)
+        x.prior_mean = prior_mean
+        x.prior_weight = prior_weight
 
         # set values for variables to be trained
         x.beta = zeros(x.num_nodes)
@@ -126,6 +135,7 @@ mutable struct BinomialEnet
         x.admm_balance_every = admm_balance_every
         x.admm_fixed_inflation_factor = admm_fixed_inflation_factor
         x.admm_penalty_max_inflation = admm_penalty_max_inflation
+        x.admm_min_penalty = admm_min_penalty
 
         # Acceleration parameters
         x.accelerate = accelerate
@@ -136,13 +146,12 @@ mutable struct BinomialEnet
         return x
     end
 end
-Base.show(io::IO, x::BinomialEnet) = print(io, "BinomialEnet")
-Base.print(io::IO, x::BinomialEnet) = print(io, "BinomialEnet")
+Base.show(io::IO, x::GaussianGFEN) = print(io, "GaussianGFEN")
+Base.print(io::IO, x::GaussianGFEN) = print(io, "GaussianGFEN")
 
 function init_vars(
-    model::BinomialEnet, # model
-    successes::Vector{Float64},
-    attempts::Vector{Float64}
+    model::GaussianGFEN, # model
+    y::AbstractVector{<:Union{Float64, Missing}}
 )
     ptr = model.ptr
     brks = model.brks
@@ -150,9 +159,28 @@ function init_vars(
     edgewts = model.lambdasl1 / α
     edgewts2 = model.lambdasl2 / α
 
-    # Initiate ADMM variables
-    p = [successes[i] / attempts[i] for i in eachindex(successes)]
-    β = [p[i] / (1 - p[i]) for i in eachindex(successes)] # odds
+    # hot start beta
+    β = zeros(model.num_nodes)
+    # k = findfirst(x -> !ismissing(x), y)
+    # curr::Float64 = y[k]
+    # @simd for i in k:model.num_nodes
+    #     if !ismissing(y[i]) 
+    #         curr = y[i]
+    #     end    
+    #     if !ismissing(curr)
+    #         β[i] = curr            
+    #     end
+    # end
+    # @simd for i in reverse(1:model.num_nodes)
+    #     if !ismissing(y[i]) 
+    #         curr = y[i]
+    #     end    
+    #     if !ismissing(curr)
+    #         β[i] = curr            
+    #     end
+    # end
+    
+    # Initiate other ADMM variables
     z = zeros(model.num_slacks) # slacks
     z2 = zeros(model.num_slacks) # slacks
     u = zeros(model.num_slacks) # scaled dual
@@ -161,6 +189,9 @@ function init_vars(
     Δu = zeros(model.num_slacks) # used for momentum
     Δz2 = zeros(model.num_slacks) # used for momentum
     Δu2 = zeros(model.num_slacks) # used for momentum
+
+    # initialize beta
+    
 
     # trail visits to each node
     num_visits = zeros(Int, model.num_nodes)
@@ -185,19 +216,17 @@ end
 # end
 
 function update_primal!(
-    model::BinomialEnet,
+    model::GaussianGFEN,
     β::Vector{Float64},
     z::Vector{Float64},
     u::Vector{Float64},
     z2::Vector{Float64},
     u2::Vector{Float64},
     num_visits::Vector{Int},
-    successes::Vector{Float64},
-    attempts::Vector{Float64},
+    y::AbstractVector{<:Union{Float64, Missing}},
     α::Float64
 )
     ptr, brks = model.ptr, model.brks
-    clamp_cnst = 5.0
     
     # admm pseudovalue for beta
     r = zeros(model.num_nodes)
@@ -206,17 +235,18 @@ function update_primal!(
     end
 
     @simd for i = 1:model.num_nodes
-        η = 1. / (1. + exp(-β[i]))
-        ω = attempts[i] * η * (1. - η)
-        ε = attempts[i] * η - successes[i]
-        H = 2.0 * ω  + 2.0 * α * num_visits[i]
-        b = (2.0 * (ω * β[i] - ε)  +  α * r[i]) / H
-        β[i] = clamp(b, -clamp_cnst, clamp_cnst) # this is very important for stability!
+        if !ismissing(y[i])
+            H = 1.0 + 2.0 * α * num_visits[i] + model.prior_weight
+            β[i] = (y[i] + α * r[i] + model.prior_mean) / H # this is very important for stability!
+        else
+            H = 2.0 * α * num_visits[i] + model.prior_weight
+            β[i] = (α * r[i] + model.prior_mean) / H # this is very important for stability!
+        end        
     end
 end
 
 @inline function update_slack_and_dual!(
-    model::BinomialEnet,
+    model::GaussianGFEN,
     z::Vector{Float64},
     u::Vector{Float64},
     Δz::Vector{Float64},
@@ -271,33 +301,32 @@ end
 end
 
 @inline function compute_negll(
-    model::BinomialEnet,
+    model::GaussianGFEN,
     β::Vector{Float64},
-    successes::Vector{Float64},
-    attempts::Vector{Float64}
+    y::AbstractVector{<:Union{Float64, Missing}}
 )
     ptr = model.ptr
     brks = model.brks
     ll = 0.0
-    @simd for i = 1:model.num_nodes
-        η = 1. / (1. + exp(-β[i]))
-        ll -= successes[i] * log(η) + (attempts[i] - successes[i]) * log(1 - η)
+    @simd for i = 1:model.num_nodes        
+        if !ismissing(y[i])
+            ll += (y[i] - β[i])^2
+        end
     end
-    ll
+    return 0.5ll
 end
 
 @inline function compute_loss(
-    model::BinomialEnet,
+    model::GaussianGFEN,
     β::Vector{Float64},
-    successes::Vector{Float64},
-    attempts::Vector{Float64},
+    y::AbstractVector{<:Union{Float64, Missing}}
 )
     ptr = model.ptr
     brks = model.brks
     lambdasl1 = model.lambdasl1
     lambdasl2 = model.lambdasl2
 
-    ll = compute_negll(model, β, successes, attempts)
+    ll = compute_negll(model, β, y)
     tv = 0.0
     @simd for j in 1:model.num_slacks
         if !(j + 1 in brks)
@@ -309,7 +338,7 @@ end
 end
 
 @inline function residual_norms!(
-    model::BinomialEnet,
+    model::GaussianGFEN,
     β::Vector{Float64},
     z::Vector{Float64},
     u::Vector{Float64},
@@ -362,7 +391,7 @@ end
 end
 
 @inline function inflate_penalty!(
-    model::BinomialEnet,
+    model::GaussianGFEN,
     u::Vector{Float64},
     u2::Vector{Float64},
     currentα::Float64,
@@ -381,7 +410,10 @@ end
     else
         κ = model.admm_fixed_inflation_factor
     end
-
+    if currentα * κ < model.admm_min_penalty
+        κ = model.admm_min_penalty / currentα
+    end
+    
     α = currentα
     if (prim_norm / prim_size) > maxgap * (dual_norm / dual_size)
         α *= κ
@@ -407,15 +439,14 @@ end
 ADMM algorithm for graph fused lasso
 """
 function fit!(
-        model::BinomialEnet,
-        successes::Vector{Float64},
-        attempts::Vector{Float64};
+        model::GaussianGFEN,
+        y::AbstractVector{<:Union{Float64, Missing}};
         steps::Int = typemax(Int),
         walltime::Float64 = Inf,
         parallel::Bool = false)
 
     # init algorithm variables, see init_vars code for symbol descriptions
-    β, z, u, Δz, Δu, z2, u2, Δz2, Δu2, α, edgewts, edgewts2, num_visits, εabs_p, εabs_d = init_vars(model, successes, attempts)
+    β, z, u, Δz, Δu, z2, u2, Δz2, Δu2, α, edgewts, edgewts2, num_visits, εabs_p, εabs_d = init_vars(model, y)
 
     step = 0
     converged = model.converged
@@ -429,13 +460,13 @@ function fit!(
 
         # update variables
         step += 1
-        update_primal!(model, β, z, u, z2, u2, num_visits, successes, attempts, α)
+        update_primal!(model, β, z, u, z2, u2, num_visits, y, α)
         update_slack_and_dual!(model, z, u, Δz, Δu, z2, u2, Δz2, Δu2, β, edgewts, edgewts2, parallel)
 
         # evaluate convergence and balance residuals
         if step % model.check_convergence_every == 0
             if model.save_loss
-                loss = compute_loss(model, β, successes, attempts)
+                loss = compute_loss(model, β, y)
                 push!(model.loss, loss)
             end
             converged, prim_norm, dual_norm, prim_size, dual_size = residual_norms!(model, β, z, u, Δz, z2, u2, Δz2, α, εabs_p, εabs_d)
@@ -461,7 +492,7 @@ function fit!(
     converged
 end
 
-function predict(model::BinomialEnet; probs::Bool = true)
+function predict(model::GaussianGFEN)
     @assert model.trained "model hasn't been trained, use fit! first"
-    probs ? [1. / (1. + exp(-βᵢ)) for βᵢ in model.beta] : model.beta
+    return model.beta
 end
