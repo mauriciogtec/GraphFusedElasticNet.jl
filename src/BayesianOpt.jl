@@ -8,7 +8,7 @@ function rbfkernel(X::AbstractArray{Float64}, a::Float64)
 end
 
 
-struct GaussianProcessSampler
+mutable struct GaussianProcessSampler
     X::AbstractMatrix{Float64}
     y::AbstractVector{Float64}
     tested::AbstractVector{Bool}
@@ -16,21 +16,20 @@ struct GaussianProcessSampler
     σ::Float64
     K::Matrix{Float64}
     b::Float64
+    offset::Float64
 
     function GaussianProcessSampler(
-            X::Array{Float64},
-            y::Vector{Float64};
-            tested::Union{Nothing, AbstractVector{Bool}}=nothing,
+            X::Array{Float64};
+            dim::Int=ndims(X),
             σ::Float64=0.001,
             a::Float64=0.5,
-            b::Float64=1.0)
-        N = length(y)
-        X = reshape(X, :, N)
-        if tested === nothing
-            tested = zeros(Bool, N)
-        end
+            b::Float64=1.0,
+            offset::Float64=0.0)
+        N = size(X, dim)
+        y = zeros(N)
+        tested = zeros(Bool, N)
         K = b * rbfkernel(X, a)
-        new(X, y, tested, a, σ, K, b)
+        new(X, y, tested, a, σ, K, b, offset)
     end
 end
 
@@ -48,7 +47,7 @@ end
 
 function gpsample(gp::GaussianProcessSampler, n::Int=1)
     # gp regression mean and variance
-    @assert n <= length(gp.y)
+    @assert n <= length(gp.y) - sum(gp.tested)
     if sum(gp.tested) == 0  # choose at random
         M = length(gp.y)
         idx = sample(1:M, n, replace=false)
@@ -60,9 +59,12 @@ function gpsample(gp::GaussianProcessSampler, n::Int=1)
     σ2 = gp.σ^2
     s = gp.tested
     K = gp.K
+    offset = gp.offset
     #
-    f = K[:, s] * ((K[s, s] + (σ2 + 1e-12)*I) \ y[s])
-    Σ = K - K[:, s] * ((K[s, s] + σ2*I) \ K[s, :]) 
+    A = K[s, s] + (σ2 + 1e-12)*I
+    β = y[s] .- offset
+    f = K[:, s] * (A \ β) .+ offset
+    Σ = K - K[:, s] * (A \ K[s, :]) 
     # sample from multivariate normal
     # and take elements with higher sampled values
     Σ = Symmetric(Σ + 1e-12I)
@@ -81,31 +83,37 @@ function gpsample(gp::GaussianProcessSampler, n::Int=1)
         push!(vals, W[Z[i]])
     end
     Xidx = gp.X[:, idx]
-    return idx, vals, Xidx
+    predidx = f[idx]
+    bandidx = sqrt.(diag(Σ)[idx])
+    return idx, vals, Xidx, predidx, bandidx
 end
 
 
 function gpeval(gp::GaussianProcessSampler)
     # gp regression mean and variance
+    @assert sum(gp.tested) > 0
     σ2 = gp.σ^2
     s = gp.tested
     K = gp.K
     y = gp.y
     N = length(gp.y)
+    offset = gp.offset
     #
-    f = K[:, s] * ((K[s, s] + (σ2 + 1e-12)*I) \ y[s])
-    Σ = K - K[:, s] * ((K[s, s] + σ2*I) \ K[s, :]) 
-    band = diag(Σ)
+    A = K[s, s] + (σ2 + 1e-12)*I
+    β = y[s] .- offset
+    f = K[:, s] * (A \ β) .+ offset
+    Σ = K - K[:, s] * (A \ K[s, :]) 
+    band = sqrt.(diag(Σ))
     return f, band
 end
 
 
-#  make sure it works fine!
+# #  make sure it works fine!
 # using Plots
 # function test()
 #     N = 200
 #     a = 0.5
-#     σ = 0.5
+#     σ = 0.1
 #     b = 1.0
 #     x = collect(range(0., stop=2π, length=N))
 #     y = zeros(N)
@@ -116,16 +124,15 @@ end
 #         y[i] = draw(x[i], σ)
 #     end
 #     ytruth = sin.(x)
-#     gp = GaussianProcessSampler(
-#         x, y, tested=copy(seen),
-#         a=a, σ=σ, b=b)
+#     gp = GaussianProcessSampler(x, a=a, σ=σ, b=b)
+#     addobs!(gp, findall(seen), y[seen])
 #     f, band = gpeval(gp) 
 #     p1 = plot(x, ytruth, label="truth", linestyle=:dash, color="black")
 #     plot!(p1, x, f, ribbon=1.96 * band, fillalpha=.2, label="fit_0", color="blue")
 #     plot!(p1, x[seen], gp.y[seen], st = :scatter, label="candidate_0", color="blue", alpha=0.4)
 #     ylims!(p1, -2.5, 2.5)
-    
-#     iu, yu, _ = gpsample(gp, 5)
+
+#     iu, yu, _, _, _ = gpsample(gp, 5)
 #     p2 = plot(x[iu], yu, st = :scatter, label="candidate_1", color="red", alpha=0.4)
 #     obs = draw.(x[iu], σ)
 #     plot!(p2, x[iu], obs, st = :scatter, label="obs_1", color="blue", alpha=0.4)
@@ -135,7 +142,7 @@ end
 #     plot!(p2, x, f, ribbon=1.96 * band, fillalpha=.2, label="fit_1", color="red")
 #     ylims!(p2, -2.5, 2.5)
 
-#     iu, yu, _ = gpsample(gp, 5)
+#     iu, yu, _, _, _ = gpsample(gp, 5)
 #     p3 = plot(x[iu], yu, st = :scatter, label="candidate_2", color="red", alpha=0.4)
 #     obs = draw.(x[iu], σ)
 #     plot!(p3, x[iu], obs, st = :scatter, label="obs_2", color="blue", alpha=0.4)
@@ -145,7 +152,7 @@ end
 #     plot!(p3, x, f, ribbon=1.96 * band, fillalpha=.2, label="fit_2", color="red")
 #     ylims!(p3, -2.5, 2.5)
 
-#     iu, yu, _ = gpsample(gp, 5)
+#     iu, yu, _, _, _ = gpsample(gp, 5)
 #     p4 = plot(x[iu], yu, st = :scatter, label="candidate_3", color="red", alpha=0.4)
 #     obs = draw.(x[iu], σ)
 #     plot!(p4, x[iu], obs, st = :scatter, label="obs_3", color="blue", alpha=0.4)

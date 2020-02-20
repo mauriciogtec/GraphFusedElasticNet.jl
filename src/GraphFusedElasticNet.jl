@@ -1,3 +1,4 @@
+__precompile__(false)
 module GraphFusedElasticNet
 
 include("L1Solver.jl")
@@ -24,5 +25,6 @@ export find_trails
 export GaussianProcessSampler
 export addobs!
 export gpsample
+export gpeval
 
 end

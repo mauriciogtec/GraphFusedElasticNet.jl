@@ -46,6 +46,7 @@ mutable struct BinomialGFEN
     admm_fixed_inflation_factor::Float64
     admm_penalty_max_inflation::Float64
     admm_min_penalty::Float64
+    admm_max_penalty::Float64
 
     # Nesterov acceleration parameters
     accelerate::Bool
@@ -72,6 +73,7 @@ mutable struct BinomialGFEN
         admm_residual_balancing::Bool = true,
         admm_adaptive_inflation::Bool = true,
         admm_min_penalty::Float64 = 0.01,
+        admm_max_penalty::Float64 = 100.0,
         accelerate::Bool = false,
         accelerate_min_improvement::Float64 = 0.999,
         accelerate_use_restarts::Bool = true
@@ -87,6 +89,7 @@ mutable struct BinomialGFEN
         @assert check_convergence_every > 0
         @assert admm_penalty_max_inflation > 0.
         @assert admm_min_penalty > 0.
+        @assert admm_max_penalty > 0.
 
         # new object
         x = new()
@@ -129,6 +132,7 @@ mutable struct BinomialGFEN
         x.admm_fixed_inflation_factor = admm_fixed_inflation_factor
         x.admm_penalty_max_inflation = admm_penalty_max_inflation
         x.admm_min_penalty = admm_min_penalty
+        x.admm_max_penalty = admm_max_penalty
 
         # Acceleration parameters
         x.accelerate = accelerate
@@ -384,13 +388,10 @@ end
     else
         κ = model.admm_fixed_inflation_factor
     end
-    if currentα * κ < model.admm_min_penalty
-        κ = model.admm_min_penalty / currentα
-    end
 
     α = currentα
-    if (prim_norm / prim_size) > maxgap * (dual_norm / dual_size)
-        α *= κ
+    if (prim_norm / prim_size) > maxgap * (dual_norm / dual_size)    
+        α = min(α * κ, model.admm_max_penalty)
         for j in eachindex(u)
             u[j] /= κ
             u2[j] /= κ
@@ -398,7 +399,7 @@ end
             edgewts2[j] /= κ
         end
     elseif (dual_norm / dual_size) > maxgap * (prim_norm / prim_size)
-        α /= κ
+        α = max(α / κ, model.admm_min_penalty)
         for j in eachindex(u)
             u[j] *= κ
             u2[j] *= κ
@@ -408,6 +409,7 @@ end
     end
     return α
 end
+
 
 """
 ADMM algorithm for graph fused lasso
