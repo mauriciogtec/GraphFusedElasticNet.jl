@@ -96,7 +96,8 @@ function binomial_gibbs_step(
     tv1::Vector{Float64},  # edge penalties l1
     tv2::Vector{Float64},  # edge penalties l2
     lasso::Float64,  # l1 reg
-    ridge::Float64,  # l2 reg
+    ridge::Float64;  # l2 reg
+    clamp_value::Float64 = 8.0
 )::Float64
     # add a small constant for numerical stability
     ϵ = 1e-8
@@ -129,13 +130,15 @@ function binomial_gibbs_step(
     # it's easy to define points with positive and negative slopes
     # based on the minimum and max posible values
     # efficiency of the sample increase with good envelope points
+    lower = min(logit(s / a),  minimum(nbr_values))
+    upper = max(logit(s / a), maximum(nbr_values))
     envelope_init = (
-        min(logit(s / a),  minimum(nbr_values)) - 1e-6,
-        max(logit(s / a), maximum(nbr_values)) + 1e-6
+        clamp(lower, - clamp_value, clamp_value) - 1e-6,
+        clamp(upper, - clamp_value, clamp_value) + 1e-6 
     )
  
     # build sampler
-    support = (-Inf, Inf)
+    support = (-clamp_value - 2e-6, clamp_value + 2e-6)
     sampler = RejectionSampler(
         target_dens, support, envelope_init, max_segments=10, from_log=true
     )
@@ -186,16 +189,33 @@ function sample_chain(
     n::Int;  # chain iterations (full sweeps),
     init::Union{Vector{Float64},Nothing},  # initial values for chain,
     init_eps::Float64=1e-8,
-    async::Bool
+    async::Bool,
+    thinning::Int = 1,
+    verbose::Bool = false
 )
     # store each gibbs sweep in matrix
-    θ = zeros(length(s), n + 1)
-    (!@isdefined init) && (init = (s + init_eps) / (a + 2init_eps))
-    θ[:, 1] = init
-    @showprogress for i in 1:n
-        θ[:, i + 1] = binomial_gibbs_sweep(
-            θ[:, i], s, a, m.nbrs, m.tv1, m.tv2, m.lasso, m.ridge, async=async
-        )
+    T = length(s)    
+    num_samples = n ÷ thinning
+    θ = zeros(Float64, T, num_samples + 1)
+
+    verbose && (pbar = Progress((num_samples * thinning + 1)))
+    num_saved = 0
+    if !@isdefined init
+        prob_mle = (s + init_eps) / (a + 2init_eps)
+        init = logistic(prob_mle)
     end
+    θ_curr = init
+
+    for i in 1:(num_samples * thinning + 1)
+        θ_curr = binomial_gibbs_sweep(
+            θ_curr, s, a, m.nbrs, m.tv1, m.tv2, m.lasso, m.ridge, async=async
+        )
+        if i == 1 || i % thinning == 0
+            θ[:, num_saved + 1] = θ_curr
+            num_saved += 1
+        end
+        verbose && (next!(pbar))
+    end
+
     return θ
 end
