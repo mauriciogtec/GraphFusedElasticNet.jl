@@ -245,3 +245,5 @@ end
 function run_sampler!(s::RejectionSampler, n::Int)
     run_sampler!(Random.GLOBAL_RNG, s, n)
 end
+
+npzwrite
