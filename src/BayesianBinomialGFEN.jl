@@ -97,54 +97,65 @@ function binomial_gibbs_step(
     tv2::Vector{Float64},  # edge penalties l2
     lasso::Float64,  # l1 reg
     ridge::Float64;  # l2 reg
-    clamp_value::Float64 = 8.0
+    clamp_value::Float64 = 10.0
 )::Float64
     # add a small constant for numerical stability
-    ϵ = 1e-8
-    a = a + 2ϵ
-    s = s + ϵ
     n_nbrs =  length(nbr_values)
+    # heuristic_scale = clamp(2^(1.0 / a), 1.0, 1e6)
     
     # define target loglikelihood, any target is ok as long as it is concave
     # and it is easy to provide one point with positive and negative slope
-    target_dens(θ) = begin
-        logll = if θ >= 0
-        - a * log(1.0 + exp(-θ)) - (a - s) * θ
-    else
-        s * θ - a * log(1.0 + exp(θ))
-    end
+    function target_dens(θ)::Tuple{Float64, Float64}
+        if θ >= 0.0
+            z = exp(-θ)
+            ω = z / (1.0 + z)
+            logll = - a * log(1.0 + z) - (a - s) * θ
+            ∇logll = a * ω - (a - s)
+        else
+            z = exp(θ)
+            ω = z / (1.0 + z)
+            logll = s * θ - a * log(1.0 + z)
+            ∇logll = s - a * ω
+        end
     
-    if n_nbrs > 0
-        # multiply by 0.5 since edges are repeated
-        tv1_reg = 0.5 * dot(abs.(θ .- nbr_values), tv1)
-        tv2_reg = 0.5 * dot((θ .- nbr_values).^2, tv2)
-    else
-        tv1_reg = 0.0
-        tv2_reg = 0.0
-    end
+        tv1_reg, tv2_reg, ∇tv1_reg, ∇tv2_reg = 0., 0., 0., 0.
+        if n_nbrs > 0
+            δ_nbrs = θ .- nbr_values
+            tv1_reg = dot(abs.(δ_nbrs), tv1)
+            tv2_reg = 0.5 * dot(δ_nbrs.^2, tv2)
+            ∇tv1_reg = dot(sign.(δ_nbrs), tv1)
+            ∇tv2_reg = dot(δ_nbrs, tv2)
+        end
+
         lasso_reg = lasso * abs(θ)
-        ridge_reg = ridge * θ^2
-        logll - tv1_reg - tv2_reg - lasso_reg - ridge_reg
+        ∇lasso_reg = lasso * sign(θ)
+        ridge_reg = 0.5ridge * θ^2
+        ∇ridge_reg = ridge * θ
+        f = (logll - tv1_reg - tv2_reg - lasso_reg - ridge_reg) # / heuristic_scale
+        g = (∇logll - ∇tv1_reg - ∇tv2_reg - ∇lasso_reg - ∇ridge_reg)  #/ heuristic_scale
+        f, g
     end
     
     # it's easy to define points with positive and negative slopes
     # based on the minimum and max posible values
     # efficiency of the sample increase with good envelope points
-    lower = min(logit(s / a),  minimum(nbr_values))
-    upper = max(logit(s / a), maximum(nbr_values))
-    envelope_init = (
-        clamp(lower, - clamp_value, clamp_value) - 1e-6,
-        clamp(upper, - clamp_value, clamp_value) + 1e-6 
-    )
- 
+    lower = max(min(logit(s / a),  minimum(nbr_values) - 1e-6), -clamp_value)
+    upper = min(max(logit(s / a), maximum(nbr_values) + 1e-6), clamp_value)
+    # lower = 0.0
+    # upper = 0.0
     # build sampler
-    support = (-clamp_value - 2e-6, clamp_value + 2e-6)
+    support = (-clamp_value, clamp_value)
+    init = (lower, upper)
     sampler = RejectionSampler(
-        target_dens, support, envelope_init, max_segments=10, from_log=true
+        target_dens, support, init, autograd=false, use_secants=true, apply_log=false
     )
     
     # return one sample
-    run_sampler!(sampler, 1)[1]
+    out = run_sampler!(sampler, 1)[1]
+    num_attempts = length(sampler.envelop)
+    # println("Num attempts: $num_attempts")
+    # error("hi")
+    return out
 end 
 
 
@@ -187,8 +198,8 @@ function sample_chain(
     s::Vector{Float64},  # successes
     a::Vector{Float64},  # attempts
     n::Int;  # chain iterations (full sweeps),
-    init::Union{Vector{Float64},Nothing},  # initial values for chain,
-    init_eps::Float64=1e-8,
+    init::Union{Vector{Float64},Nothing} = nothing,  # initial values for chain,
+    init_eps::Float64=0.0,
     async::Bool,
     thinning::Int = 1,
     verbose::Bool = false
@@ -200,9 +211,8 @@ function sample_chain(
 
     verbose && (pbar = Progress((num_samples * thinning + 1)))
     num_saved = 0
-    if !@isdefined init
-        prob_mle = (s + init_eps) / (a + 2init_eps)
-        init = logistic(prob_mle)
+    if isnothing(init)
+        init = logistic.((s .+ init_eps) ./ (a .+ 2init_eps))
     end
     θ_curr = init
 

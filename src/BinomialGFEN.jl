@@ -204,7 +204,7 @@ function update_primal!(
     α::Float64
 )
     ptr, brks = model.ptr, model.brks
-    clamp_cnst = 5.0
+    clamp_cnst = 10.0
     
     # admm pseudovalue for beta
     r = zeros(model.num_nodes)
