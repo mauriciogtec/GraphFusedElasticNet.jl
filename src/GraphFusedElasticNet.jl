@@ -28,6 +28,7 @@ export Trails
 export graph_from_edgelist
 export find_trails
 export GaussianProcessSampler
+export RandomGaussianProcessSampler
 export addobs!
 export gpsample
 export gpeval
