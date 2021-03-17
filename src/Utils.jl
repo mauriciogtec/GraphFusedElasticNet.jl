@@ -3,6 +3,10 @@ import LightGraphs: SimpleGraph, add_edge!, neighbors
 
 sorted(i::Int, j::Int) = (min(i, j), max(i, j))
 
+function fill_if_scalar(x::Union{Vector{T}, T}, dims) where T
+    (x isa Vector) ? x : fill(x, dims)
+end
+
 function invcount(ptr::Vector{Int}, brks::Vector{Int})
     m = length(ptr) - 1
     cnt = counter([sorted(ptr[i], ptr[i + 1]) for i in 1:m  if i + 1 ∉ brks])

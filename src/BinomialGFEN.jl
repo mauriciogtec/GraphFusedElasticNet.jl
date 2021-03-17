@@ -171,7 +171,7 @@ function init_vars(
 
     # trail visits to each node
     num_visits = zeros(Int, model.num_nodes)
-    @simd for j in 1:model.num_slacks
+    for j in 1:model.num_slacks
         z[j] = β[ptr[j]] # best guess for z
         z2[j] = β[ptr[j]] # best guess for z
         num_visits[ptr[j]] += 1
@@ -204,18 +204,19 @@ function update_primal!(
     α::Float64
 )
     ptr, brks = model.ptr, model.brks
-    clamp_cnst = 5.0
+    clamp_cnst = 10.0
     
     # admm pseudovalue for beta
     r = zeros(model.num_nodes)
-    @simd for j = 1:model.num_slacks # can't do simd here :(
+    for j = 1:model.num_slacks # can't do simd here :(
         r[ptr[j]] += z[j] - u[j] + z2[j] - u2[j]
     end
 
-    @simd for i = 1:model.num_nodes
-        η = 1. / (1. + exp(-β[i]))
-        ω = attempts[i] * η * (1. - η)
-        ε = attempts[i] * η - successes[i]
+    for i = 1:model.num_nodes
+        a, s, θ = attempts[i], successes[i], β[i]
+        η = (θ ≥ 0.0) ? 1. / (1. + exp(-θ)) : exp(θ) / (1. + exp(θ))
+        ω = a * η * (1. - η)
+        ε = a * η - successes[i]
         H = 2.0 * ω  + 2.0 * α * num_visits[i]
         b = (2.0 * (ω * β[i] - ε)  +  α * r[i]) / H
         β[i] = clamp(b, -clamp_cnst, clamp_cnst) # this is very important for stability!
@@ -240,7 +241,7 @@ end
     ptr = model.ptr
     brks = model.brks
 
-    @simd for j in 1:model.num_slacks
+    for j in 1:model.num_slacks
         Δu[j] = -u[j] # we'll add u(k+1) in last loop
         Δz[j] = -z[j] # we'll add z(k+1) in last loop
         Δu2[j] = -u2[j] # we'll add u2(k+1) in last loop
@@ -267,7 +268,7 @@ end
         end
     end
 
-    @simd for j in 1:model.num_slacks
+    for j in 1:model.num_slacks
         u[j] -= z[j] # now u(k+1) += beta(k+1) - z(k+1)
         Δz[j] += z[j] # now Δz(k+1) = z(k+1) - z(k)
         Δu[j] += u[j] # now Δu(k+1) = u(k+1) - u(k)
@@ -284,7 +285,7 @@ end
     attempts::Vector{Float64}
 )
     ll = 0.0
-    @simd for i = 1:length(β)
+    for i = 1:length(β)
         η = 1. / (1. + exp(-β[i]))
         ll -= successes[i] * log(η + 1e-12) 
         ll -= (attempts[i] - successes[i]) * log(1.0 - η + 1e-12)
@@ -306,7 +307,7 @@ end
 
     ll = compute_negll(β, successes, attempts)
     tv = 0.0
-    @simd for j in 1:model.num_slacks
+    for j in 1:model.num_slacks
         if !(j + 1 in brks)
             δ = β[ptr[j + 1]] - β[ptr[j]]
             tv += lambdasl1[j] * abs(δ) + 0.5 * lambdasl2[j] * δ^2
@@ -334,7 +335,7 @@ end
     dual_norm = 0.0
     prim_size = 0.0
     dual_size = 0.0
-    @simd for i = 1:model.num_slacks
+    for i = 1:model.num_slacks
         prim_norm += (β[ptr[i]] - z[i])^2 + (β[ptr[i]] - z2[i])^2
         dual_norm += Δz[i]^2 + Δz2[i]^2
         prim_size += β[ptr[i]]^2
@@ -361,8 +362,8 @@ end
         push!(model.prim_norms, prim_norm)
         push!(model.dual_norms, dual_norm)
     else
-        model.prim_norm = [prim_norm]
-        model.dual_norm = [dual_norm]
+        model.prim_norms = [prim_norm]
+        model.dual_norms = [dual_norm]
     end
 
     converged, prim_norm, dual_norm, prim_size, dual_size
