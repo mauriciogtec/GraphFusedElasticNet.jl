@@ -13,24 +13,15 @@ include("ARS.jl")
 include("BayesianBinomialGFEN.jl")
 
 
-export BinomialGFEN
-export GaussianGFEN
-export DensityTree
+export BinomialGFEN, GaussianGFEN
 export BayesianBinomialGFEN
 export sample_chain
-export filter1D!
-export filter1Dl2!
-export filter1D
-export filter1Dl2
-export fit!
-export predict
+export filter1D!, filter1Dl2!, filter1D, filter1Dl2
+export fit!, predict
 export Trails
-export graph_from_edgelist
-export find_trails
-export GaussianProcessSampler
-export RandomGaussianProcessSampler
-export addobs!
-export gpsample
-export gpeval
+export graph_from_edgelist, find_trails
+export GaussianProcessSampler, RandomGaussianProcessSampler
+export addobs!, gpsample, gpeval
+export eval_logprob, make_tree_from_bfs
 
 end
