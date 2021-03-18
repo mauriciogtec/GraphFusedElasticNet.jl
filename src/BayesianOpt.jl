@@ -240,7 +240,7 @@ function gpeval(
         n = length(Xnew)
         pred = fill(-Inf, n)
         band = zeros(n)
-        return pars, pred, band
+        return pred, band
     else
         σ2 = gp.σ^2
         Xoldmat = hcat([x for x in gp.X]...)
@@ -258,7 +258,7 @@ function gpeval(
         Σ = K11 - K10 * (A \ K01) 
         Σ = Symmetric(Σ + 1e-12I)
         band = sqrt.(diag(Σ))
-        return Xnewmat, pred, band
+        return pred, band
     end
 end
 
