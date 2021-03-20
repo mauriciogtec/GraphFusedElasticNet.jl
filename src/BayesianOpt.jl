@@ -134,7 +134,7 @@ mutable struct RandomGaussianProcessSampler
         a::Float64=0.5,
         b::Float64=1.0,
         offset::Float64=0.0,
-        adaptive_normalization::Bool = false
+        adaptive_normalization::Bool=false
     ) where T <: Distribution
         X = Vector{Float64}[]
         y = Float64[]
@@ -296,39 +296,39 @@ end
 
 
 ## test random gp 
-using Plots
-N = 4
-a = 0.5
-σ = 0.05
-b = 1.0 / √(2π) * 2a
-scale = 100.0
-offset = -10.0 / scale
-x = collect(range(0., stop=2π, length=N))
-y = zeros(N)
-draw(x::Float64, σ::Float64) = (sin(x) + σ * randn()) / scale + offset
-for i in 1:N
-    y[i] = draw(x[i], σ)
-end
-ytruth = sin.(x) ./ scale .+ offset
-dists = [Uniform(0.0, 2π)]
-gp = RandomGaussianProcessSampler(dists, a=a, σ=σ, b=b, adaptive_normalization=true)
+# using Plots
+# N = 4
+# a = 0.5
+# σ = 0.05
+# b = 1.0 / √(2π) * 2a
+# scale = 100.0
+# offset = -10.0 / scale
+# x = collect(range(0., stop=2π, length=N))
+# y = zeros(N)
+# draw(x::Float64, σ::Float64) = (sin(x) + σ * randn()) / scale + offset
+# for i in 1:N
+#     y[i] = draw(x[i], σ)
+# end
+# ytruth = sin.(x) ./ scale .+ offset
+# dists = [Uniform(0.0, 2π)]
+# gp = RandomGaussianProcessSampler(dists, a=a, σ=σ, b=b, adaptive_normalization=true)
 
-for i in 1:N
-    addobs!(gp, [x[i]], y[i])
-end
+# for i in 1:N
+#     addobs!(gp, [x[i]], y[i])
+# end
 
-@time pars, pred, band = gpsample(gp, 16; batch_size=500)
-x_sample = vec(pars)
-y_sample = pred
+# @time pars, pred, band = gpsample(gp, 16; batch_size=500)
+# x_sample = vec(pars)
+# y_sample = pred
 
-xseq = [[xi] for xi in collect(range(0., stop=2π, length=50))]
-pred_eval, band_eval = gpeval(gp, xseq)
-xseq = vcat(xseq...)
+# xseq = [[xi] for xi in collect(range(0., stop=2π, length=50))]
+# pred_eval, band_eval = gpeval(gp, xseq)
+# xseq = vcat(xseq...)
 
-p1 = plot(x, ytruth, label="truth", linestyle=:dash, color="black")
-plot!(p1, vec(xseq), pred_eval, ribbon=1.96 * band_eval, fillalpha=.2, label="fit_0", color="blue")
-plot!(p1, x, gp.y, st = :scatter, label="candidate_0", color="blue", alpha=0.4)
-plot!(p1, x_sample, y_sample, st = :scatter, label="candidate_1", color=:red)
+# p1 = plot(x, ytruth, label="truth", linestyle=:dash, color="black")
+# plot!(p1, vec(xseq), pred_eval, ribbon=1.96 * band_eval, fillalpha=.2, label="fit_0", color="blue")
+# plot!(p1, x, gp.y, st = :scatter, label="candidate_0", color="blue", alpha=0.4)
+# plot!(p1, x_sample, y_sample, st = :scatter, label="candidate_1", color=:red)
 # ylims!(p1, -2.5, 2.5)
 
 
