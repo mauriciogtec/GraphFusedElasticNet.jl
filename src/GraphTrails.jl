@@ -625,6 +625,19 @@ function find_trails(g::SimpleGraph; ntrails::Int = 1)
 end
 
 
+function grid_trails(nr::Int, nc::Int)
+    ptr = Int[]
+    brks = Int[]
+    idx = LinearIndices((nr, nc))
+    for j=1:nc, i in 1:nr
+        push!(ptr, idx[i, j])
+        (i == 1) && push!(brks, idx[i, j])
+    end
+    push!(brks, nr * nc + 1)
+    ptr, brks
+end
+
+
 # g0 = Graph(7)
 # add_edge!(g0, 1, 2)
 # add_edge!(g0, 1, 3)
