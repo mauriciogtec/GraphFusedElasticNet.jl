@@ -202,25 +202,25 @@ function sample_chain(
     init_eps::Float64=0.0,
     async::Bool,
     thinning::Int = 1,
-    verbose::Bool = false
+    verbose::Bool = false,
+    burnin::Int = 0
 )
     # store each gibbs sweep in matrix
     T = length(s)    
-    num_samples = n ÷ thinning
-    θ = zeros(Float64, T, num_samples + 1)
+    θ = zeros(Float64, T, (n - burnin) ÷ thinning)
 
-    verbose && (pbar = Progress((num_samples * thinning + 1)))
     num_saved = 0
     if isnothing(init)
         init = logistic.((s .+ init_eps) ./ (a .+ 2init_eps))
     end
     θ_curr = init
-
-    for i in 1:(num_samples * thinning + 1)
+    
+    verbose && (pbar = Progress(n))
+    for i in 1:n
         θ_curr = binomial_gibbs_sweep(
             θ_curr, s, a, m.nbrs, m.tv1, m.tv2, m.lasso, m.ridge, async=async
         )
-        if i == 1 || i % thinning == 0
+        if i > burnin && i % thinning == 0
             θ[:, num_saved + 1] = θ_curr
             num_saved += 1
         end
