@@ -166,8 +166,9 @@ function gpsample(
     if length(gp) == 0  # choose at random
         pars = vcat([x' for x in candidates]...)
         pred = fill(-Inf, n)
+        fhat = fill(-Inf, n)
         band = zeros(n)
-        return pars, pred, band
+        return pars, pred, fhat, band
     else
         y = gp.y
         if gp.adaptive_normalization
@@ -181,26 +182,26 @@ function gpsample(
         K11 = gp.b * rbfkernel(Xnewmat, gp.a)
         K01 = gp.b * rbfkernel(Xoldmat, Xnewmat, gp.a)
         K10 = K01'
-        offset = gp.offset
         s = length(gp)
         #
         σ2 = gp.σ^2
-        A = K00 + (σ2 + 1e-12)*I
-        β = y .- offset
-        pred = K10 * (A \ β) .+ offset
+        A = K00 + (σ2 + 1e-12)I
+        fhat = K10 * (A \ y)
         Σ = K11 - K10 * (A \ K01) 
         Σ = Symmetric(Σ + 1e-12I)
-        W = rand(MvNormal(pred, Σ))
+        pred = rand(MvNormal(fhat, Σ))
         band = sqrt.(diag(Σ))
         order = sortperm(pred, rev=true)
         pred = pred[order]
         band = band[order]
+        fhat = fhat[order]
         Xnewmat = Xnewmat[:, order]
         if gp.adaptive_normalization
-            pred = (σ_seen + eps()) .* pred .+ μ_seen
-            band = (σ_seen + eps()) .* band
+            pred .= (σ_seen + eps()) .* pred .+ μ_seen
+            fhat .= (σ_seen + eps()) .* fhat .+ μ_seen
+            band .= (σ_seen + eps()) .* band
         end
-        return Xnewmat, pred, band
+        return Xnewmat, pred, fhat, band
     end
 end
 
@@ -210,17 +211,19 @@ function gpsample(
     n::Int;
     kwargs...
 )
-    xs = []
+    xs = AbstractVector{Float64}[]
+    fs = Float64[]
     ps = Float64[]
     bs = Float64[]
     for i in 1:n
-        x, p, b = gpsample(gp; kwargs...)
+        x, p, f, b = gpsample(gp; kwargs...)
         push!(xs, x[:, 1])
+        push!(fs, f[1])
         push!(ps, p[1])
         push!(bs, b[1])
     end
     xs = hcat(xs...)
-    xs, ps, bs
+    xs, ps, fs, bs
 end
 
 function gpeval(gp::RandomGaussianProcessSampler)
@@ -229,19 +232,17 @@ function gpeval(gp::RandomGaussianProcessSampler)
     y = gp.y
     if gp.adaptive_normalization
         μ_seen = mean(y)
-        σ_seen = std(y)
-        y = (y .- μ_seen) ./ (σ_seen + eps())
+        std_seen = std(y)
+        y = (y .- μ_seen) ./ (std_seen + eps())
     end
     σ2 = gp.σ^2
     X = hcat([x for x in gp.X]...)
     (size(X, 2) ≥ 1_000) && warn("kernel matrix too large, try sampling less candidates")
     K = gp.b * rbfkernel(X, gp.a)
-    offset = gp.offset
     s = length(gp)
     #
-    A = K + (σ2 + 1e-12)*I
-    β = y .- offset
-    f = K * (A \ β) .+ offset
+    A = K + (σ2 + 1e-12)I
+    f = K * (A \ y)
     Σ = K - K * (A \ K) 
     Σ = Symmetric(Σ + 1e-12I)
     band = sqrt.(diag(Σ))
@@ -280,7 +281,7 @@ function gpeval(
         offset = gp.offset
         s = length(gp)
         #
-        A = K00 + (σ2 + 1e-12)*I
+        A = K00 + (σ2 + 1e-12)I
         β = y .- offset
         pred = K10 * (A \ β) .+ offset
         Σ = K11 - K10 * (A \ K01) 
@@ -297,19 +298,18 @@ end
 
 ## test random gp 
 # using Plots
-# N = 4
-# a = 0.5
+# N = 11
+# a = 0.2
 # σ = 0.05
-# b = 1.0 / √(2π) * 2a
+# b = 1.0
 # scale = 100.0
 # offset = -10.0 / scale
 # x = collect(range(0., stop=2π, length=N))
 # y = zeros(N)
-# draw(x::Float64, σ::Float64) = (sin(x) + σ * randn()) / scale + offset
+# draw(x::Float64, σ::Float64) = (sin(2x) + σ * randn()) / scale + offset
 # for i in 1:N
 #     y[i] = draw(x[i], σ)
 # end
-# ytruth = sin.(x) ./ scale .+ offset
 # dists = [Uniform(0.0, 2π)]
 # gp = RandomGaussianProcessSampler(dists, a=a, σ=σ, b=b, adaptive_normalization=true)
 
@@ -317,7 +317,7 @@ end
 #     addobs!(gp, [x[i]], y[i])
 # end
 
-# @time pars, pred, band = gpsample(gp, 16; batch_size=500)
+# @time pars, pred, fhat, band = gpsample(gp, 16; batch_size=500)
 # x_sample = vec(pars)
 # y_sample = pred
 
@@ -325,10 +325,14 @@ end
 # pred_eval, band_eval = gpeval(gp, xseq)
 # xseq = vcat(xseq...)
 
-# p1 = plot(x, ytruth, label="truth", linestyle=:dash, color="black")
+# ytruth = sin.(2xseq) ./ scale .+ offset
+# p1 = plot(xseq, ytruth, label="truth", linestyle=:dash, color="black")
 # plot!(p1, vec(xseq), pred_eval, ribbon=1.96 * band_eval, fillalpha=.2, label="fit_0", color="blue")
-# plot!(p1, x, gp.y, st = :scatter, label="candidate_0", color="blue", alpha=0.4)
+# plot!(p1, x, gp.y, st = :scatter, label="data", color="blue", alpha=0.4)
 # plot!(p1, x_sample, y_sample, st = :scatter, label="candidate_1", color=:red)
+
+
+
 # ylims!(p1, -2.5, 2.5)
 
 

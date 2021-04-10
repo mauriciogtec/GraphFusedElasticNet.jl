@@ -214,7 +214,7 @@ function sample_chain(
         init = logistic.((s .+ init_eps) ./ (a .+ 2init_eps))
     end
     θ_curr = init
-    
+
     verbose && (pbar = Progress(n))
     for i in 1:n
         θ_curr = binomial_gibbs_sweep(

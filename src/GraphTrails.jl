@@ -633,9 +633,14 @@ function grid_trails(nr::Int, nc::Int)
         push!(ptr, idx[i, j])
         (i == 1) && push!(brks, idx[i, j])
     end
-    push!(brks, nr * nc + 1)
+    for i in 1:nr, j=1:nc
+        push!(ptr, idx[i, j])
+        (i == 1) && push!(brks, nr * nc + idx[i, j])
+    end
+    push!(brks, 2 * nr * nc + 1)
     ptr, brks
 end
+
 
 
 # g0 = Graph(7)
