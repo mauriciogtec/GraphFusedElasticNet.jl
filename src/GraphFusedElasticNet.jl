@@ -22,6 +22,6 @@ export Trails
 export graph_from_edgelist, find_trails, grid_trails
 export GaussianProcessSampler, RandomGaussianProcessSampler
 export addobs!, gpsample, gpeval
-export eval_logprob, make_tree_from_bfs
+export eval_logprob, make_tree_from_bfs, uniform_binary_splits, eval_logdens
 
 end

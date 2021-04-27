@@ -3,19 +3,21 @@ using Printf
 
 mutable struct Node{T<:AbstractFloat}
     split::T
+    low::T
+    up::T
     logit::Union{Nothing, T}
     left::Union{Node, Nothing}
     right::Union{Node, Nothing}
     function Node(
-        split::T, logit::Union{T, Nothing} = nothing
+        split::T, low::T, up::T, logit::Union{T, Nothing} = nothing
     ) where T<:AbstractFloat
-        new{T}(split, logit, nothing, nothing)
+        new{T}(split, low, up, logit, nothing, nothing)
     end
 end
 
 ##
 isleaf(v::Node) = isnothing(v.left) && isnothing(v.right)
-descend(v::Node{T}, x::T) where T<:AbstractFloat = (x ≤ v.split) ? v.left : v.right
+descend(v::Node{T}, x::T) where T<:AbstractFloat = (x ≤ v.split) ? (v.left, 0) : (v.right, 1)
 
 # tostr(x::Union{Node, Float64, Nothing}; add_children=false) = begin
 #     if isnothing(x) 
@@ -40,6 +42,27 @@ function getval(v::Node{T}, x::T) where {T<:AbstractFloat}
 end
 
 
+function uniform_binary_splits(xmin::T, xmax::T, depth::Int) where T <: AbstractFloat
+    lows = T[]
+    mids = T[]
+    ups = T[]
+    levs = Int[] 
+    splitvals = collect(LinRange(xmin, xmax, 2^depth + 1))
+    for d in 1:depth
+        width = 2 ^ (depth - d)
+        num_intervals = 2 ^ (d - 1)
+        for j in 1:num_intervals
+            start = 2 * (j - 1) * width + 1
+            push!(lows, splitvals[start])
+            push!(mids, splitvals[start + width])
+            push!(ups, splitvals[start + 2width])
+            push!(levs, d - 1)
+        end
+    end
+    (lows=lows, mids=mids, ups=ups, levs=levs, splitvals=splitvals)
+end
+
+
 function eval_logprob(root::Node{T}, x::T) where T<:AbstractFloat
     @assert !isleaf(root) "must start from non-leaf"
     logprob = zero(T)
@@ -51,10 +74,32 @@ function eval_logprob(root::Node{T}, x::T) where T<:AbstractFloat
         else
             logprob += β - log(one(T)+ exp(β))
         end
-        v = descend(v, x)
+        v, _ = descend(v, x)
     end
     return logprob
 end
+
+
+function eval_logdens(root::Node{T}, x::T) where T<:AbstractFloat
+    @assert !isleaf(root) "must start from non-leaf"
+    logprob = zero(T)
+    v = root
+    prev = v
+    descdir = 0
+    while !isnothing(v)
+        β = getval(v, x)
+        if β ≥ zero(T)
+            logprob += -log(one(T) + exp(-β))
+        else
+            logprob += β - log(one(T)+ exp(β))
+        end
+        prev = v
+        v, descdir = descend(v, x)
+    end
+    δ = (descdir == 0) ? prev.split - prev.low : prev.up - prev.split
+    return logprob - log(δ)
+end
+
 
 ##
 function print_bfs(v::Node)
@@ -78,10 +123,10 @@ function make_tree_from_bfs(
 ) where {T<:AbstractFloat, S<:Union{Nothing, AbstractFloat}}
     num_nodes = length(mid)
     next_parent = Queue{Node}()
-    root = Node(mid[1], logits[1])
+    root = Node(mid[1], lows[1], ups[1], logits[1])
     curr = root  # current parent
     for i in 2:num_nodes
-        v = Node(mid[i], logits[i])
+        v = Node(mid[i], lows[i], ups[i], logits[i])
         while !(ups[i] ≈ curr.split || lows[i] ≈ curr.split)
             @assert !isempty(next_parent)  "disconnected tree!"
             curr = dequeue!(next_parent)
