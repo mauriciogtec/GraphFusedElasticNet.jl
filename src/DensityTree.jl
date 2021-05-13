@@ -138,5 +138,41 @@ function make_tree_from_bfs(
         end
         enqueue!(next_parent, v)
     end
-    root
+    return root
+end
+
+function make_tree(
+    lows::Vector{T},
+    mid::Vector{T},
+    ups::Vector{T},
+    logits::Vector{S} = fill(nothing, length(mid))
+) where {T<:AbstractFloat, S<:Union{Nothing, AbstractFloat}}
+    num_nodes = length(mid)
+    nodes = [Node(mid[i], lows[i], ups[i], logits[i]) for i in 1:num_nodes]
+    is_root = Set{Int}(1:num_nodes)
+    for i in 1:num_nodes
+        # serch for parent upwards
+        child = nodes[i]
+        child_lower, child_upper = lows[i], ups[i]
+        for j in 1:num_nodes
+            parent = nodes[j]
+            parent_mid = mid[j]
+            parent_lower, parent_upper = lows[j], ups[j]
+            if child_lower ≈ parent_mid && child_upper ≈ parent_upper
+                parent.right = child
+                pop!(is_root, i)
+                break
+            elseif child_upper ≈ parent_mid && child_lower ≈ parent_lower
+                parent.left = child
+                pop!(is_root, i)
+                break
+            end
+        end
+    end
+    if isempty(is_root)
+        error("circular graph")
+    elseif length(is_root) > 1
+        error("multiple roots")
+    end
+    nodes[pop!(is_root)]
 end
